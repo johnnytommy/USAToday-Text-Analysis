@@ -1,0 +1,288 @@
+---
+title: "Text Analysis of USA TODAY Climate Change Articles 2010-2019"
+author: "John Thomas"
+date: "4/19/2020"
+output:
+  rmdformats::readthedown:
+      toc_float: true
+      number_sections: true
+      code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(scipen = 999, digits = 3, big.mark=",", warn = -1)
+```
+
+```{r base_lib, include=FALSE}
+library(rmdformats) #Good looking output
+library(readr) #read in csv
+library(tidyverse) #Standard dplyr commands
+library(gt) #Good looking tables
+library(data.table) #Building loops for files
+library(wordcloud2) #Word Cloud 
+library(tidytext) #Text Mining
+#devtools::install_github("quanteda/quanteda"), select 3 when prompted
+library(quanteda) #Lexicoder Dictionary
+library(kableExtra) #Kable Function
+library(ggthemes) #fivethirtyeight style graph
+
+
+path <- "C:/Users/johnt/Desktop/Residential Education/RD/Amy Research/input/"
+input <- "input/"
+
+```
+
+# The Data
+
+In this analysis, we will be looking at [USA Today](https://www.usatoday.com/) articles published during 2010-2019. Using [Nexis Uni](https://www.lexisnexis.com/en-us/support/nexis-uni/default.page), articles were pulled with the following search criteria in the headline or leading paragraph of the article:
+
+- climate change
+- global warming
+- climate crisis
+
+After pulling this, we found a total of **517 articles** on climate change across the ten-year period, as follows.
+
+```{r}
+#hand calculated counts of articles
+article_counts <- read_csv("C:/Users/johnt/Desktop/Residential Education/RD/Amy Research/article_counts.csv", 
+                           col_types = cols(Year = col_character())) 
+  
+#article table
+article_counts %>% 
+  tibble() %>% 
+  gt()
+```
+
+
+
+## Word Cloud
+
+Aggregating all words in these articles together, we find the following as the top fifteen most frequent words used.
+
+```{r message = FALSE}
+# get a list of the files in the input directory via loop
+files <- list.files(path)
+
+text.function <- function(x){
+  tmp <- read_file(paste0(path,x))
+  tmp <- tibble(text = tmp)
+  return(tmp)
+}
+out1 <- lapply(files, text.function)
+
+##Now we get the full dataframes.
+out1_all <- out1
+text_all <- lapply(out1_all, setDT) %>% 
+  rbindlist(. , id="id_var") %>% 
+  remove_rownames %>%
+  column_to_rownames(var="id_var")
+
+text_all <- matrix(unlist(text_all),nr=10)
+
+# tokenize all text
+tokens_all <- tibble(text = text_all) %>%
+  unnest_tokens(word, text)
+
+#build list of word counts
+word_cloud <- tokens_all %>% 
+  group_by(word) %>% 
+  summarize(count = n()) %>%
+  anti_join(stop_words) %>% 
+  filter(!(word == "nthe")) %>% 
+  arrange(desc(count))
+
+#Remove Numbers
+word_cloud<-word_cloud[-grep("\\b\\d+\\b", word_cloud$word),]
+
+#table of word freq
+tibble(head(word_cloud, 15)) %>% 
+  gt()
+```
+
+We can visualize this as a word cloud!
+
+```{r}
+#Word cloud
+word_col <- word_cloud$word 
+
+word_clould <- word_cloud %>% 
+  remove_rownames %>% 
+  column_to_rownames(var="word") %>% 
+  cbind(word_col)
+
+set.seed(6969) # for reproducibility 
+wordcloud2(data=word_cloud, size = 1, color='random-dark', shape = "pentagon")
+```
+
+<br />
+
+If you have trouble following that one, here's one more your style #yeehaww!!!
+
+![](word_cloud2.png)
+
+
+<br />
+<br />
+
+# Sentiment Analysis
+
+To best analyze the tone used in the USA Today articles, we break the data up by year and look at the various sentiments used in the texts; we do so with the following lexicons:
+
+- 2015 Lexicoder Sentiment Dictionary
+- NRC Lexicon
+
+
+## 2015 Lexicoder Sentiment Dictionary
+
+In analyzing political texts, the [2015 Lexicoder Sentiment Dictionary](https://quanteda.io/reference/data_dictionary_LSD2015.html) was used to analyze sentiment glob-style, returning positive and negative sentiment in context of the sentence. For the USA Today articles in total we see the following
+
+```{r}
+##Lexicoder dict
+x <- dfm(text_all, dictionary = data_dictionary_LSD2015)
+
+lexi <- convert(x, to = "data.frame")
+year_col <- data.frame(year = c(2010,2011,2012,2013,2014,2015,2016,2017,2018,2019))
+
+#sentiment table
+lexi2 <- cbind(lexi,year_col) %>% 
+  mutate(neg_tot = negative + neg_positive,
+         pos_tot = positive + neg_negative) %>%
+  select(-c(doc_id,negative,  neg_positive, positive , neg_negative)) %>% 
+  mutate(sentiment = pos_tot - neg_tot)
+
+
+Positive  <- sum(lexi2$pos_tot)
+Negative  <- sum(lexi2$neg_tot)
+Sentiment <- Positive - Negative
+
+x<- rbind(Positive,Negative,Sentiment)
+colnames(x) <- "Score"
+
+#table
+kable(x)%>%
+  kable_styling(position = "center", full_width = FALSE)
+```
+
+
+With an overall sentiment score of **`r Sentiment`** across all articles, USA Today stays almost perfectly equal in positive and negative verbage. This will be interesting to compare across networks in further research.
+
+
+Subtracting the negative score from the positive score gives the complete sentiment value. Calculating the sentiment value for each year we find the following:
+
+```{r }
+#Plot Sentiments over Year
+ggplot(data = lexi2, aes(x= as.factor(year), y = sentiment, fill = as.factor(year))) +
+  geom_col(show.legend = FALSE)+
+  ggtitle("USA Today Sentiments by Year")+
+  labs(subtitle="Lexicoder Dictionary", x = "Year", y = "Sentiment")+
+  theme_fivethirtyeight(base_size = 16, base_family = "sans" )
+
+```
+
+
+
+## NRC Lexicon
+
+According to [Saif Mohammad and Peter Turney](http://saifmohammad.com/WebPages/NRC-Emotion-Lexicon.htm), the NRC Emotion Lexicon associate each word in the English language with eight basic emotions plus positive/negstive sentiment.
+
+- anger 
+- fear
+- anticipation
+- trust
+- surprise
+- sadness
+- joy
+- disgust
+- negative sentiment 
+- positive sentiment
+
+In analyzing all the texts together we see the following distribution of these eight attributes.
+
+```{r message = FALSE}
+
+# get the sentiment from all text: 
+all_text_nrc <- tokens_all %>%
+  inner_join(get_sentiments("nrc")) %>% # pull out only sentiment words
+  count(sentiment) %>% # count each
+  spread(sentiment, n, fill = 0)# made data wide rather than narrow
+
+#Transpose for Plot
+all_nrc_tidy <- all_text_nrc  %>% 
+  pivot_longer(everything(), names_to = 'sentiment', values_to = 'count') %>% 
+  arrange(desc(count))
+
+##NRC PLOT all years
+ggplot(data = all_nrc_tidy, aes(reorder(sentiment, -count, sum),y =  count, fill = sentiment))+
+  geom_col(show.legend = FALSE) +
+  ggtitle("USA Today Sentiments 2010-2019")+
+  labs(subtitle="NRC Dictionary") +
+  theme_fivethirtyeight(base_size = 16, base_family = "sans" )+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+
+
+Further breaking it down by year, we see trends in the emotions over time as follows:
+
+```{r message = FALSE}
+#NRC loop
+nrc.function <- function(x){
+  tmp <- x %>% 
+    unnest_tokens(word, text) %>%
+    inner_join(get_sentiments("nrc")) %>% # pull out only sentiment words
+    count(sentiment) %>% # count each 
+    spread(sentiment, n, fill = 0)
+  return(tmp)
+}
+out2 <- lapply(out1, nrc.function)
+
+
+out2 <- lapply(out1, nrc.function)
+nrc_all <- lapply(out2, setDT) %>% 
+  rbindlist(. , id="id_var") %>% 
+  cbind(year = c(2010,2011,2012,2013,2014,2015,2016,2017,2018,2019)) %>% 
+  select(-id_var)
+
+#NRC table
+year_usa <- nrc_all %>%
+  mutate(year = str_remove(year, '^nrc')) %>% 
+  pivot_longer(cols = -year, names_to = 'sentiment', values_to = 'count') %>%  
+  arrange(desc(count)) 
+
+##Stacked Bar Plot NRC
+ggplot(year_usa, aes(x = year, y = count, fill = sentiment)) +
+  geom_bar(colour = 'black', stat = 'identity') + 
+  ggtitle("USA Today Sentiments by Year")+
+  labs(subtitle="NRC Dictionary") +
+  theme_fivethirtyeight(base_size = 16, base_family = "sans" )
+
+
+```
+
+
+Here is the same data with a line graph.
+
+
+
+```{r}
+##Line Plot NRC
+ggplot(year_usa, aes(x = year, y = count, group = sentiment, color = sentiment)) +
+  geom_line() + 
+  ggtitle("USA Today Sentiments by Year")+
+  labs(subtitle="NRC Dictionary") +
+  theme_fivethirtyeight(base_size = 16, base_family = "sans" )
+```
+
+
+
+**NOTE:** The data is not scaled in this analysis.
+
+
+# Bibliography
+
+Mohammad, Saif M. (2016). [The Sentiment and Emotion Lexicons](http://saifmohammad.com/WebPages/NRC-Emotion-Lexicon.htm). National Research Council of Canada.
+
+Young, L. & Soroka, S. (2012). [Affective News: The Automated Coding of Sentiment in Political Texts](https://www.tandfonline.com/doi/abs/10.1080/10584609.2012.671234). Political Communication, 29(2), 205--231.
+
